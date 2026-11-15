@@ -66,6 +66,10 @@ pub struct WindowState {
     pub zoom: f64,
     /// 最後に開いていたページ (次回起動時に復元)
     pub last_url: Option<String>,
+    /// 開いていたタブの URL (並び順どおり)
+    pub tabs: Vec<String>,
+    /// アクティブだったタブの位置
+    pub active_tab: usize,
 }
 
 impl Default for WindowState {
@@ -78,6 +82,8 @@ impl Default for WindowState {
             maximized: false,
             zoom: 1.0,
             last_url: None,
+            tabs: vec![],
+            active_tab: 0,
         }
     }
 }
