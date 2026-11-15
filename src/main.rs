@@ -3,6 +3,7 @@
 mod config;
 mod icon;
 mod links;
+mod notion_icon;
 mod popup;
 mod single_instance;
 
@@ -81,6 +82,9 @@ fn print_help() {
         "notion-linux {ver}\n\n\
          使い方: notion-linux [URL]\n\n\
          URL を渡すと、そのページを開きます (起動済みなら既存ウィンドウで開きます)。\n\n\
+         notion-linux --fetch-icon [--system]\n\
+         \x20 notion.so から Notion のアイコンを取得して保存します\n\
+         \x20 (既定は ~/.local/share/icons、--system は /usr/share/icons。通常はインストール時に自動実行)\n\n\
          設定ファイル: {cfg}/config.json\n\
          ショートカット: Ctrl+R/F5 再読み込み, Ctrl+= / Ctrl+- / Ctrl+0 ズーム,\n\
                          Alt+←/→ 戻る/進む, Ctrl+Q 終了",
@@ -91,9 +95,12 @@ fn print_help() {
 
 fn main() {
     let mut arg_url: Option<String> = None;
+    let (mut fetch_icon, mut system) = (false, false);
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-h" | "--help" => return print_help(),
+            "--fetch-icon" => fetch_icon = true,
+            "--system" => system = true,
             "-V" | "--version" => {
                 println!("notion-linux {}", env!("CARGO_PKG_VERSION"));
                 return;
@@ -105,6 +112,23 @@ fn main() {
             }
             other => eprintln!("[notion-linux] 不明な引数を無視します: {other}"),
         }
+    }
+
+    if fetch_icon {
+        // インストール時に呼ばれる: Notion 公式アイコンを取得して保存し、終了する
+        let target = if system {
+            notion_icon::Target::System
+        } else {
+            notion_icon::Target::User
+        };
+        match notion_icon::fetch_and_install(target) {
+            Ok(path) => println!("Notion のアイコンを保存しました: {}", path.display()),
+            Err(e) => {
+                eprintln!("Notion のアイコンを取得できませんでした: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
     }
 
     let cfg = Config::load();
@@ -135,7 +159,14 @@ fn main() {
     let state = Rc::new(RefCell::new(WindowState::load()));
 
     // ---- ウィンドウ ----
-    let window_icon = WindowIcon::from_rgba(icon::rgba(128), 128, 128).ok();
+    // Notion 公式アイコン (キャッシュ済みなら) か、同梱のオリジナルアイコン
+    let (icon_rgba, icon_w, icon_h) = cfg
+        .use_notion_icon
+        .then(notion_icon::load_installed)
+        .flatten()
+        .map(|pb| notion_icon::to_rgba(&pb))
+        .unwrap_or_else(|| (icon::rgba(128), 128, 128));
+    let window_icon = WindowIcon::from_rgba(icon_rgba.clone(), icon_w, icon_h).ok();
     let mut wb = WindowBuilder::new()
         .with_title(APP_NAME)
         .with_window_icon(window_icon)
@@ -201,7 +232,7 @@ fn main() {
 
     // ---- トレイ ----
     let (tray, tray_ids) = if cfg.tray_icon {
-        match build_tray(&proxy) {
+        match build_tray(&proxy, icon_rgba, icon_w, icon_h) {
             Ok((t, ids)) => (Some(t), Some(ids)),
             Err(e) => {
                 eprintln!("[notion-linux] トレイアイコンを作成できません: {e}");
@@ -380,6 +411,9 @@ fn setup_webkit(
 
 fn build_tray(
     proxy: &EventLoopProxy<UserEvent>,
+    icon_rgba: Vec<u8>,
+    icon_w: u32,
+    icon_h: u32,
 ) -> Result<(TrayIcon, TrayMenuIds), Box<dyn std::error::Error>> {
     let show = MenuItem::new("Notion を表示 / 隠す", true, None);
     let reload = MenuItem::new("再読み込み", true, None);
@@ -402,7 +436,7 @@ fn build_tray(
         .with_menu(Box::new(menu))
         .with_tooltip(APP_NAME)
         .with_title(APP_NAME)
-        .with_icon(TrayIconImage::from_rgba(icon::rgba(64), 64, 64)?)
+        .with_icon(TrayIconImage::from_rgba(icon_rgba, icon_w, icon_h)?)
         .build()?;
     Ok((tray, ids))
 }

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Notion のアイコンはリポジトリ/パッケージに含めず、インストール時に notion.so から取得する。
+set -e
+ICON_DIR=/usr/share/icons/hicolor
+
+if [ "$1" = "configure" ]; then
+    if timeout 30 /usr/bin/notion-linux --fetch-icon --system; then
+        :
+    elif [ ! -e "$ICON_DIR/256x256/apps/notion-linux.png" ]; then
+        echo "notion-linux: Notion のアイコンを取得できなかったため、オリジナルのアイコンを使います" >&2
+        echo "notion-linux: 後で 'sudo notion-linux --fetch-icon --system' を実行すると取得し直せます" >&2
+        install -Dm644 /usr/share/notion-linux/original-icon.svg \
+            "$ICON_DIR/scalable/apps/notion-linux.svg"
+    fi
+    gtk-update-icon-cache -q -t -f "$ICON_DIR" 2>/dev/null || true
+    update-desktop-database -q 2>/dev/null || true
+fi
+
+#DEBHELPER#
+exit 0
