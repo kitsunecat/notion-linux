@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Notion
+GenericName=Notes and Docs
+GenericName[ja]=ノート・ドキュメント
+Comment=Unofficial Notion desktop app for Linux
+Comment[ja]=Linux 用の非公式 Notion デスクトップアプリ
+Exec=notion-linux %U
+Icon=notion-linux
+Terminal=false
+Categories=Office;Utility;
+Keywords=notion;notes;wiki;docs;
+MimeType=x-scheme-handler/notion;
+StartupWMClass=notion-linux
+StartupNotify=true

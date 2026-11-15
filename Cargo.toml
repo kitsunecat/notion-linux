@@ -1,0 +1,43 @@
+[package]
+name = "notion-linux"
+version = "0.1.0"
+edition = "2024"
+description = "Unofficial Notion desktop app for Linux (Rust + WebKitGTK)"
+license = "MIT"
+repository = "https://github.com/kitsunecat/notion-linux"
+readme = "README.md"
+
+[dependencies]
+dirs = "7.0.0"
+open = "5.4.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tao = "0.37.2"
+tray-icon = "0.26.1"
+wry = "0.57.2"
+gtk = "0.18"
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[package.metadata.deb]
+name = "notion-linux"
+maintainer = "kitsunecat"
+copyright = "2026, kitsunecat"
+extended-description = """\
+Unofficial lightweight Notion desktop client for Linux, built with Rust \
+(wry/tao) and WebKitGTK. Keeps you signed in, remembers window size, \
+opens external links in your browser, and lives in the system tray."""
+section = "web"
+priority = "optional"
+depends = "$auto, libayatana-appindicator3-1"
+recommends = "libnotify-bin, xdg-utils"
+assets = [
+    ["target/release/notion-linux", "usr/bin/", "755"],
+    ["assets/notion-linux.desktop", "usr/share/applications/", "644"],
+    ["assets/notion-linux.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["README.md", "usr/share/doc/notion-linux/README.md", "644"],
+]
