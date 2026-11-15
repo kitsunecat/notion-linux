@@ -69,8 +69,6 @@ enum UserEvent {
     Open(String),
     Title(String),
     Ipc(String),
-    /// Notion 公式アイコンのダウンロードが完了した (一時ファイルのパス)
-    IconDownloaded(std::path::PathBuf),
 }
 
 struct TrayMenuIds {
@@ -84,6 +82,9 @@ fn print_help() {
         "notion-linux {ver}\n\n\
          使い方: notion-linux [URL]\n\n\
          URL を渡すと、そのページを開きます (起動済みなら既存ウィンドウで開きます)。\n\n\
+         notion-linux --fetch-icon [--system]\n\
+         \x20 notion.so から Notion のアイコンを取得して保存します\n\
+         \x20 (既定は ~/.local/share/icons、--system は /usr/share/icons。通常はインストール時に自動実行)\n\n\
          設定ファイル: {cfg}/config.json\n\
          ショートカット: Ctrl+R/F5 再読み込み, Ctrl+= / Ctrl+- / Ctrl+0 ズーム,\n\
                          Alt+←/→ 戻る/進む, Ctrl+Q 終了",
@@ -94,9 +95,12 @@ fn print_help() {
 
 fn main() {
     let mut arg_url: Option<String> = None;
+    let (mut fetch_icon, mut system) = (false, false);
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-h" | "--help" => return print_help(),
+            "--fetch-icon" => fetch_icon = true,
+            "--system" => system = true,
             "-V" | "--version" => {
                 println!("notion-linux {}", env!("CARGO_PKG_VERSION"));
                 return;
@@ -108,6 +112,23 @@ fn main() {
             }
             other => eprintln!("[notion-linux] 不明な引数を無視します: {other}"),
         }
+    }
+
+    if fetch_icon {
+        // インストール時に呼ばれる: Notion 公式アイコンを取得して保存し、終了する
+        let target = if system {
+            notion_icon::Target::System
+        } else {
+            notion_icon::Target::User
+        };
+        match notion_icon::fetch_and_install(target) {
+            Ok(path) => println!("Notion のアイコンを保存しました: {}", path.display()),
+            Err(e) => {
+                eprintln!("Notion のアイコンを取得できませんでした: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
     }
 
     let cfg = Config::load();
@@ -141,7 +162,7 @@ fn main() {
     // Notion 公式アイコン (キャッシュ済みなら) か、同梱のオリジナルアイコン
     let (icon_rgba, icon_w, icon_h) = cfg
         .use_notion_icon
-        .then(notion_icon::load_cached)
+        .then(notion_icon::load_installed)
         .flatten()
         .map(|pb| notion_icon::to_rgba(&pb))
         .unwrap_or_else(|| (icon::rgba(128), 128, 128));
@@ -223,13 +244,6 @@ fn main() {
     };
     let close_to_tray = cfg.close_to_tray && tray.is_some();
 
-    if cfg.use_notion_icon && notion_icon::needs_refresh() {
-        let proxy = proxy.clone();
-        notion_icon::fetch_in_background(cfg.user_agent.clone(), move |path| {
-            let _ = proxy.send_event(UserEvent::IconDownloaded(path));
-        });
-    }
-
     // ---- イベントループ ----
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -305,17 +319,6 @@ fn main() {
                     "zoom-reset" => wk.set_zoom_level(1.0),
                     "quit" => quit(control_flow),
                     _ => {}
-                },
-                UserEvent::IconDownloaded(path) => match notion_icon::install(&path) {
-                    Ok(pixbuf) => {
-                        let (rgba, w, h) = notion_icon::to_rgba(&pixbuf);
-                        window.set_window_icon(WindowIcon::from_rgba(rgba.clone(), w, h).ok());
-                        if let (Some(tray), Ok(img)) = (&tray, TrayIconImage::from_rgba(rgba, w, h))
-                        {
-                            let _ = tray.set_icon(Some(img));
-                        }
-                    }
-                    Err(e) => eprintln!("[notion-linux] アイコンを保存できませんでした: {e}"),
                 },
                 UserEvent::Menu(e) => {
                     if let Some(ids) = &tray_ids {

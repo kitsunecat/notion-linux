@@ -6,6 +6,9 @@ cargo build --release
 PREFIX="${PREFIX:-$HOME/.local}"
 install -Dm755 target/release/notion-linux "$PREFIX/bin/notion-linux"
 install -Dm644 assets/notion-linux.svg "$PREFIX/share/icons/hicolor/scalable/apps/notion-linux.svg"
+# Notion のアイコンを notion.so から取得して ~/.local/share/icons に保存 (失敗したらオリジナルのまま)
+"$PREFIX/bin/notion-linux" --fetch-icon \
+  || echo "Notion のアイコンを取得できなかったため、オリジナルのアイコンを使います"
 sed "s|^Exec=notion-linux|Exec=$PREFIX/bin/notion-linux|" assets/notion-linux.desktop \
   > /tmp/notion-linux.desktop
 install -Dm644 /tmp/notion-linux.desktop "$PREFIX/share/applications/notion-linux.desktop"

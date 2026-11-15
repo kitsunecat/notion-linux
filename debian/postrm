@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+ICON_DIR=/usr/share/icons/hicolor
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    rm -f "$ICON_DIR/256x256/apps/notion-linux.png" \
+          "$ICON_DIR/scalable/apps/notion-linux.svg"
+    gtk-update-icon-cache -q -t -f "$ICON_DIR" 2>/dev/null || true
+    update-desktop-database -q 2>/dev/null || true
+fi
+
+#DEBHELPER#
+exit 0

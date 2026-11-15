@@ -1,63 +1,67 @@
-//! Notion 公式アイコンの取得とキャッシュ。
+//! Notion 公式アイコンの取得と保存。
 //!
 //! Notion のロゴは Notion Labs, Inc. の商標なので、このリポジトリには含めない。
-//! 代わりに、ユーザーの環境で notion.so からアイコンをダウンロードし、
-//! ~/.local/share/icons 以下にキャッシュして使う (ブラウザがファビコンを取得するのと同じ)。
-//! 取得できない場合や `use_notion_icon: false` の場合は、同梱のオリジナルアイコンを使う。
+//! 代わりに **インストール時** に notion.so からアイコンをダウンロードしてローカルに保存する。
+//! - .deb: postinst が `notion-linux --fetch-icon --system` を実行 → /usr/share/icons/hicolor
+//! - install-local.sh: `notion-linux --fetch-icon` を実行 → ~/.local/share/icons/hicolor
+//!
+//! アプリ起動時はネットワークに接続せず、保存済みのアイコンを読むだけ。
+//! 保存済みのものが無い場合や `use_notion_icon: false` の場合は、同梱のオリジナルアイコンを使う。
 
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use gtk::gdk_pixbuf::{InterpType, Pixbuf};
 
 const SITE: &str = "https://www.notion.so";
 const SIZE: i32 = 256;
 const MAX_BYTES: u64 = 5 * 1024 * 1024;
-/// これより古いキャッシュは取り直す
-const REFRESH_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const SYSTEM_ICONS_DIR: &str = "/usr/share/icons/hicolor";
 
-fn icons_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("icons/hicolor")
+/// アイコンの保存先
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// ~/.local/share/icons/hicolor
+    User,
+    /// /usr/share/icons/hicolor (root 権限が必要)
+    System,
+}
+
+fn icons_dir(target: Target) -> PathBuf {
+    match target {
+        Target::User => dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("icons/hicolor"),
+        Target::System => PathBuf::from(SYSTEM_ICONS_DIR),
+    }
 }
 
 /// ウィンドウ・トレイ用に保存する PNG
-pub fn png_path() -> PathBuf {
-    icons_dir().join(format!(
+pub fn png_path(target: Target) -> PathBuf {
+    icons_dir(target).join(format!(
         "{s}x{s}/apps/{}.png",
         crate::config::APP_ID,
         s = SIZE
     ))
 }
 
-/// アプリメニュー用。システムの scalable SVG より優先されるよう、同じ名前の SVG で PNG を包む
-fn svg_path() -> PathBuf {
-    icons_dir().join(format!("scalable/apps/{}.svg", crate::config::APP_ID))
+/// アプリメニュー用。PNG を同じ名前の SVG で包み、scalable のオリジナルアイコンより優先させる
+fn svg_path(target: Target) -> PathBuf {
+    icons_dir(target).join(format!("scalable/apps/{}.svg", crate::config::APP_ID))
 }
 
-/// キャッシュ済みのアイコンを読み込む
-pub fn load_cached() -> Option<Pixbuf> {
-    Pixbuf::from_file(png_path()).ok()
+/// インストール時に保存した Notion アイコンを読み込む (ユーザー → システムの順)
+pub fn load_installed() -> Option<Pixbuf> {
+    [Target::User, Target::System]
+        .into_iter()
+        .find_map(|t| Pixbuf::from_file(png_path(t)).ok())
 }
 
-/// キャッシュが無い、または古いか
-pub fn needs_refresh() -> bool {
-    match std::fs::metadata(png_path()).and_then(|m| m.modified()) {
-        Ok(t) => SystemTime::now()
-            .duration_since(t)
-            .map(|age| age > REFRESH_AFTER)
-            .unwrap_or(false),
-        Err(_) => true,
-    }
-}
-
-/// バックグラウンドでアイコンをダウンロードし、一時ファイルのパスを `done` に渡す。
-pub fn fetch_in_background(user_agent: String, done: impl FnOnce(PathBuf) + Send + 'static) {
-    std::thread::spawn(move || match fetch(&user_agent) {
-        Ok(path) => done(path),
-        Err(e) => eprintln!("[notion-linux] Notion のアイコンを取得できませんでした: {e}"),
-    });
+/// `--fetch-icon` の本体: ダウンロードして保存する
+pub fn fetch_and_install(target: Target) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let downloaded = fetch(crate::config::DEFAULT_USER_AGENT)?;
+    install(&downloaded, target)?;
+    Ok(png_path(target))
 }
 
 fn fetch(user_agent: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -184,8 +188,7 @@ fn absolutize(href: &str) -> String {
 }
 
 /// ダウンロードした画像を 256px の PNG として保存し、アプリメニュー用の SVG も作る。
-/// GTK のメインスレッドで呼ぶこと。
-pub fn install(downloaded: &std::path::Path) -> Result<Pixbuf, Box<dyn std::error::Error>> {
+pub fn install(downloaded: &Path, target: Target) -> Result<Pixbuf, Box<dyn std::error::Error>> {
     let src = Pixbuf::from_file(downloaded)?;
     let _ = std::fs::remove_file(downloaded);
     let pixbuf = if src.width() == SIZE && src.height() == SIZE {
@@ -195,11 +198,11 @@ pub fn install(downloaded: &std::path::Path) -> Result<Pixbuf, Box<dyn std::erro
             .ok_or("アイコンの縮小に失敗しました")?
     };
 
-    let png = png_path();
+    let png = png_path(target);
     std::fs::create_dir_all(png.parent().unwrap())?;
     pixbuf.savev(&png, "png", &[])?;
 
-    let svg = svg_path();
+    let svg = svg_path(target);
     std::fs::create_dir_all(svg.parent().unwrap())?;
     let b64 = gtk::glib::base64_encode(&std::fs::read(&png)?);
     std::fs::write(
@@ -212,7 +215,7 @@ pub fn install(downloaded: &std::path::Path) -> Result<Pixbuf, Box<dyn std::erro
     )?;
 
     // アイコンキャッシュがある場合は更新 (無ければ何もしない)
-    let dir = icons_dir();
+    let dir = icons_dir(target);
     if dir.join("icon-theme.cache").exists() {
         let _ = std::process::Command::new("gtk-update-icon-cache")
             .args(["-f", "-t"])
@@ -278,14 +281,13 @@ mod tests {
         let dl = tmp.join("dl.png");
         src.savev(&dl, "png", &[]).unwrap();
 
-        let pb = install(&dl).unwrap();
+        let pb = install(&dl, Target::User).unwrap();
         assert_eq!((pb.width(), pb.height()), (SIZE, SIZE));
-        assert!(png_path().starts_with(&tmp) && png_path().exists());
-        let svg = std::fs::read_to_string(svg_path()).unwrap();
+        assert!(png_path(Target::User).starts_with(&tmp) && png_path(Target::User).exists());
+        let svg = std::fs::read_to_string(svg_path(Target::User)).unwrap();
         assert!(svg.contains("data:image/png;base64,"));
-        let (rgba, w, h) = to_rgba(&load_cached().unwrap());
+        let (rgba, w, h) = to_rgba(&load_installed().unwrap());
         assert_eq!(rgba.len(), (w * h * 4) as usize);
-        assert!(!needs_refresh());
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 }

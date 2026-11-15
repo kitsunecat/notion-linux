@@ -4,7 +4,7 @@ Rust 製の **Linux 用 Notion デスクトップアプリ (非公式)** です�
 [wry](https://github.com/tauri-apps/wry) / [tao](https://github.com/tauri-apps/tao) と WebKitGTK で `https://www.notion.so` を専用ウィンドウに表示します。
 
 > Notion Labs, Inc. とは関係のない非公式クライアントです。「Notion」および Notion のロゴは Notion Labs, Inc. の商標です。
-> このリポジトリにはロゴ画像を含めていません。Notion のアイコンは、各自の環境で起動時に notion.so から取得して使います (下記「アイコン」参照)。
+> このリポジトリにはロゴ画像を含めていません。Notion のアイコンは、各自の環境でインストール時に notion.so から取得して保存します (下記「アイコン」参照)。
 
 ## 機能
 
@@ -16,7 +16,7 @@ Rust 製の **Linux 用 Notion デスクトップアプリ (非公式)** です�
 - **デスクトップ通知**: Notion の通知を許可済みの状態で起動
 - **二重起動防止**: 2 回目の起動は既存ウィンドウを前面に出す (`notion-linux <URL>` ならそのページを開く)
 - **ダウンロード**: `~/ダウンロード` (XDG のダウンロードフォルダ) に保存して通知
-- **Notion のアイコン**: 起動時に notion.so から公式アイコンを取得してウィンドウ・トレイ・アプリメニューに使用
+- **Notion のアイコン**: インストール時に notion.so から公式アイコンを取得して保存し、ウィンドウ・トレイ・アプリメニューに使用 (起動時の通信なし)
 - **キーボードショートカット**
 
 | キー | 動作 |
@@ -80,7 +80,7 @@ sudo apt install build-essential pkg-config \
 | `restore_last_page` | `true` | 前回最後に開いていたページを開く |
 | `close_to_tray` | `true` | × でトレイに格納 (`false` なら終了) |
 | `tray_icon` | `true` | トレイアイコンを表示 |
-| `use_notion_icon` | `true` | notion.so から Notion 公式アイコンを取得して使う (`false` で同梱のオリジナルアイコン) |
+| `use_notion_icon` | `true` | インストール時に保存した Notion アイコンを使う (`false` で同梱のオリジナルアイコン) |
 | `user_agent` | Chrome (Linux) 相当 | 空文字にすると WebKitGTK 既定の UA |
 | `disable_dmabuf_renderer` | `true` | 白い画面になる環境 (NVIDIA など) 向けの回避策 |
 | `spell_checking` / `spell_checking_languages` | `true` / `["en_US"]` | スペルチェック |
@@ -94,13 +94,22 @@ sudo apt install build-essential pkg-config \
 
 ## アイコン
 
-初回起動時 (と 30 日ごと) に、notion.so のページに書かれているアイコン (apple-touch-icon / favicon) をダウンロードし、次の場所に保存します。
+Notion のアイコンは **インストール時に 1 回だけ** notion.so から取得して保存します。アプリの起動時に取得し直すことはありません。
 
-- `~/.local/share/icons/hicolor/256x256/apps/notion-linux.png` (ウィンドウ・トレイ用)
-- `~/.local/share/icons/hicolor/scalable/apps/notion-linux.svg` (アプリメニュー用。同梱アイコンより優先されます)
+| インストール方法 | 保存先 |
+| --- | --- |
+| .deb (`apt install`) | `/usr/share/icons/hicolor/` (postinst が `notion-linux --fetch-icon --system` を実行) |
+| `scripts/install-local.sh` | `~/.local/share/icons/hicolor/` (`notion-linux --fetch-icon` を実行) |
 
-取得できるまでは同梱のオリジナルアイコンが表示されます。メニューのアイコンが変わらない場合は、一度ログアウトするかパネルを再起動 (`mate-panel --replace &`) してください。
-オリジナルアイコンに戻すには、`use_notion_icon` を `false` にして上の 2 ファイルを削除します。
+ネットワークに繋がっていないなどで取得できなかった場合は、同梱のオリジナルアイコンを使います。後から取得し直すには次のどちらかを実行します。
+
+```bash
+sudo notion-linux --fetch-icon --system   # .deb でインストールした場合
+notion-linux --fetch-icon                 # 自分のユーザーだけに保存する場合
+```
+
+メニューのアイコンがすぐに変わらない場合は、パネルを再起動 (`mate-panel --replace &`) するか一度ログアウトしてください。
+.deb をアンインストールすると、取得したアイコンも削除されます。
 
 ## トラブルシューティング
 
