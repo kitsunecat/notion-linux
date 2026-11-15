@@ -3,7 +3,8 @@
 Rust 製の **Linux 用 Notion デスクトップアプリ (非公式)** です。
 [wry](https://github.com/tauri-apps/wry) / [tao](https://github.com/tauri-apps/tao) と WebKitGTK で `https://www.notion.so` を専用ウィンドウに表示します。
 
-> Notion Labs, Inc. とは関係のない非公式クライアントです。「Notion」は Notion Labs, Inc. の商標です。アイコンは本プロジェクトのオリジナルです。
+> Notion Labs, Inc. とは関係のない非公式クライアントです。「Notion」および Notion のロゴは Notion Labs, Inc. の商標です。
+> このリポジトリにはロゴ画像を含めていません。Notion のアイコンは、各自の環境で起動時に notion.so から取得して使います (下記「アイコン」参照)。
 
 ## 機能
 
@@ -15,6 +16,7 @@ Rust 製の **Linux 用 Notion デスクトップアプリ (非公式)** です�
 - **デスクトップ通知**: Notion の通知を許可済みの状態で起動
 - **二重起動防止**: 2 回目の起動は既存ウィンドウを前面に出す (`notion-linux <URL>` ならそのページを開く)
 - **ダウンロード**: `~/ダウンロード` (XDG のダウンロードフォルダ) に保存して通知
+- **Notion のアイコン**: 起動時に notion.so から公式アイコンを取得してウィンドウ・トレイ・アプリメニューに使用
 - **キーボードショートカット**
 
 | キー | 動作 |
@@ -78,6 +80,7 @@ sudo apt install build-essential pkg-config \
 | `restore_last_page` | `true` | 前回最後に開いていたページを開く |
 | `close_to_tray` | `true` | × でトレイに格納 (`false` なら終了) |
 | `tray_icon` | `true` | トレイアイコンを表示 |
+| `use_notion_icon` | `true` | notion.so から Notion 公式アイコンを取得して使う (`false` で同梱のオリジナルアイコン) |
 | `user_agent` | Chrome (Linux) 相当 | 空文字にすると WebKitGTK 既定の UA |
 | `disable_dmabuf_renderer` | `true` | 白い画面になる環境 (NVIDIA など) 向けの回避策 |
 | `spell_checking` / `spell_checking_languages` | `true` / `["en_US"]` | スペルチェック |
@@ -88,6 +91,16 @@ sudo apt install build-essential pkg-config \
 - 設定: `~/.config/notion-linux/config.json`
 - ウィンドウ状態: `~/.local/state/notion-linux/state.json`
 - ログイン情報などの Web データ: `~/.local/share/notion-linux/webdata` (消すとログアウトします)
+
+## アイコン
+
+初回起動時 (と 30 日ごと) に、notion.so のページに書かれているアイコン (apple-touch-icon / favicon) をダウンロードし、次の場所に保存します。
+
+- `~/.local/share/icons/hicolor/256x256/apps/notion-linux.png` (ウィンドウ・トレイ用)
+- `~/.local/share/icons/hicolor/scalable/apps/notion-linux.svg` (アプリメニュー用。同梱アイコンより優先されます)
+
+取得できるまでは同梱のオリジナルアイコンが表示されます。メニューのアイコンが変わらない場合は、一度ログアウトするかパネルを再起動 (`mate-panel --replace &`) してください。
+オリジナルアイコンに戻すには、`use_notion_icon` を `false` にして上の 2 ファイルを削除します。
 
 ## トラブルシューティング
 
@@ -111,7 +124,8 @@ cargo clippy --all-targets -- -D warnings
 - `src/links.rs` … URL をアプリ内 / 外部ブラウザに分類
 - `src/config.rs` … 設定とウィンドウ状態
 - `src/single_instance.rs` … 二重起動防止 (Unix ソケット)
-- `src/icon.rs` … オリジナルアイコンの描画
+- `src/icon.rs` … オリジナルアイコンの描画 (フォールバック用)
+- `src/notion_icon.rs` … Notion 公式アイコンの取得とキャッシュ
 
 ## ライセンス
 

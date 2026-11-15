@@ -3,6 +3,7 @@
 mod config;
 mod icon;
 mod links;
+mod notion_icon;
 mod popup;
 mod single_instance;
 
@@ -68,6 +69,8 @@ enum UserEvent {
     Open(String),
     Title(String),
     Ipc(String),
+    /// Notion 公式アイコンのダウンロードが完了した (一時ファイルのパス)
+    IconDownloaded(std::path::PathBuf),
 }
 
 struct TrayMenuIds {
@@ -135,7 +138,14 @@ fn main() {
     let state = Rc::new(RefCell::new(WindowState::load()));
 
     // ---- ウィンドウ ----
-    let window_icon = WindowIcon::from_rgba(icon::rgba(128), 128, 128).ok();
+    // Notion 公式アイコン (キャッシュ済みなら) か、同梱のオリジナルアイコン
+    let (icon_rgba, icon_w, icon_h) = cfg
+        .use_notion_icon
+        .then(notion_icon::load_cached)
+        .flatten()
+        .map(|pb| notion_icon::to_rgba(&pb))
+        .unwrap_or_else(|| (icon::rgba(128), 128, 128));
+    let window_icon = WindowIcon::from_rgba(icon_rgba.clone(), icon_w, icon_h).ok();
     let mut wb = WindowBuilder::new()
         .with_title(APP_NAME)
         .with_window_icon(window_icon)
@@ -201,7 +211,7 @@ fn main() {
 
     // ---- トレイ ----
     let (tray, tray_ids) = if cfg.tray_icon {
-        match build_tray(&proxy) {
+        match build_tray(&proxy, icon_rgba, icon_w, icon_h) {
             Ok((t, ids)) => (Some(t), Some(ids)),
             Err(e) => {
                 eprintln!("[notion-linux] トレイアイコンを作成できません: {e}");
@@ -212,6 +222,13 @@ fn main() {
         (None, None)
     };
     let close_to_tray = cfg.close_to_tray && tray.is_some();
+
+    if cfg.use_notion_icon && notion_icon::needs_refresh() {
+        let proxy = proxy.clone();
+        notion_icon::fetch_in_background(cfg.user_agent.clone(), move |path| {
+            let _ = proxy.send_event(UserEvent::IconDownloaded(path));
+        });
+    }
 
     // ---- イベントループ ----
     event_loop.run(move |event, _target, control_flow| {
@@ -288,6 +305,17 @@ fn main() {
                     "zoom-reset" => wk.set_zoom_level(1.0),
                     "quit" => quit(control_flow),
                     _ => {}
+                },
+                UserEvent::IconDownloaded(path) => match notion_icon::install(&path) {
+                    Ok(pixbuf) => {
+                        let (rgba, w, h) = notion_icon::to_rgba(&pixbuf);
+                        window.set_window_icon(WindowIcon::from_rgba(rgba.clone(), w, h).ok());
+                        if let (Some(tray), Ok(img)) = (&tray, TrayIconImage::from_rgba(rgba, w, h))
+                        {
+                            let _ = tray.set_icon(Some(img));
+                        }
+                    }
+                    Err(e) => eprintln!("[notion-linux] アイコンを保存できませんでした: {e}"),
                 },
                 UserEvent::Menu(e) => {
                     if let Some(ids) = &tray_ids {
@@ -380,6 +408,9 @@ fn setup_webkit(
 
 fn build_tray(
     proxy: &EventLoopProxy<UserEvent>,
+    icon_rgba: Vec<u8>,
+    icon_w: u32,
+    icon_h: u32,
 ) -> Result<(TrayIcon, TrayMenuIds), Box<dyn std::error::Error>> {
     let show = MenuItem::new("Notion を表示 / 隠す", true, None);
     let reload = MenuItem::new("再読み込み", true, None);
@@ -402,7 +433,7 @@ fn build_tray(
         .with_menu(Box::new(menu))
         .with_tooltip(APP_NAME)
         .with_title(APP_NAME)
-        .with_icon(TrayIconImage::from_rgba(icon::rgba(64), 64, 64)?)
+        .with_icon(TrayIconImage::from_rgba(icon_rgba, icon_w, icon_h)?)
         .build()?;
     Ok((tray, ids))
 }

@@ -24,6 +24,8 @@ pub struct Config {
     pub close_to_tray: bool,
     /// トレイアイコンを表示する
     pub tray_icon: bool,
+    /// notion.so から Notion 公式アイコンを取得して使う (false なら同梱のオリジナルアイコン)
+    pub use_notion_icon: bool,
     /// WebView に送る User-Agent。空文字なら WebKitGTK の既定値を使う
     pub user_agent: String,
     /// WebKitGTK の DMA-BUF レンダラーを無効化する (NVIDIA 環境での白画面対策)
@@ -43,6 +45,7 @@ impl Default for Config {
             restore_last_page: true,
             close_to_tray: true,
             tray_icon: true,
+            use_notion_icon: true,
             user_agent: DEFAULT_USER_AGENT.into(),
             disable_dmabuf_renderer: true,
             spell_checking: true,
