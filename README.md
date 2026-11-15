@@ -17,6 +17,7 @@ Rust 製の **Linux 用 Notion デスクトップアプリ (非公式)** です�
 - **二重起動防止**: 2 回目の起動は既存ウィンドウを前面に出す (`notion-linux <URL>` ならそのページを開く)
 - **ダウンロード**: `~/ダウンロード` (XDG のダウンロードフォルダ) に保存して通知
 - **Notion のアイコン**: インストール時に notion.so から公式アイコンを取得して保存し、ウィンドウ・トレイ・アプリメニューに使用 (起動時の通信なし)
+- **タブ**: Ctrl+クリック / 中クリックで Notion 内のリンクを新しいタブ (背景) で開く。タブは次回起動時に復元
 - **キーボードショートカット**
 
 | キー | 動作 |
@@ -24,6 +25,11 @@ Rust 製の **Linux 用 Notion デスクトップアプリ (非公式)** です�
 | `Ctrl+R` / `F5` | 再読み込み |
 | `Ctrl+=` / `Ctrl++` / `Ctrl+-` / `Ctrl+0` | 拡大 / 縮小 / 100% |
 | `Alt+←` / `Alt+→` (マウスの戻る/進むボタン) | 戻る / 進む |
+| `Ctrl+クリック` / 中クリック (リンク) | 新しいタブで開く (外部サイトはブラウザ) |
+| `Ctrl+T` | 新しいタブ |
+| `Ctrl+W` / タブの × / タブを中クリック | タブを閉じる (最後の 1 つは閉じない) |
+| `Ctrl+Shift+T` | 閉じたタブを開き直す |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` (`Ctrl+PageDown` / `Ctrl+PageUp`) | 次 / 前のタブ |
 | `Ctrl+Q` | 終了 |
 
 ## Ubuntu MATE でのインストール
@@ -77,7 +83,7 @@ sudo apt install build-essential pkg-config \
 | キー | 既定値 | 説明 |
 | --- | --- | --- |
 | `start_url` | `https://www.notion.so/` | 起動時に開く URL |
-| `restore_last_page` | `true` | 前回最後に開いていたページを開く |
+| `restore_last_page` | `true` | 前回開いていたタブ (Notion のページ) を開き直す |
 | `close_to_tray` | `true` | × でトレイに格納 (`false` なら終了) |
 | `tray_icon` | `true` | トレイアイコンを表示 |
 | `use_notion_icon` | `true` | インストール時に保存した Notion アイコンを使う (`false` で同梱のオリジナルアイコン) |
@@ -129,6 +135,8 @@ cargo clippy --all-targets -- -D warnings
 構成:
 
 - `src/main.rs` … ウィンドウ・WebView・トレイ・イベントループ
+- `src/tabs.rs` … タブ (gtk::Notebook) と各タブの WebView、Ctrl+クリックの処理
+- `src/shortcuts.rs` … キーボードショートカット
 - `src/popup.rs` … 外部リンクの振り分けとログイン用ポップアップ
 - `src/links.rs` … URL をアプリ内 / 外部ブラウザに分類
 - `src/config.rs` … 設定とウィンドウ状態

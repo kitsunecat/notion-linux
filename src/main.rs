@@ -5,7 +5,9 @@ mod icon;
 mod links;
 mod notion_icon;
 mod popup;
+mod shortcuts;
 mod single_instance;
+mod tabs;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -14,6 +16,8 @@ use config::{Config, WindowState};
 use links::{LinkKind, LinkPolicy};
 use single_instance::{Instance, Request};
 
+use gtk::prelude::WidgetExt;
+use tabs::Tabs;
 use tao::dpi::{PhysicalPosition, PhysicalSize};
 use tao::event::{Event, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -21,54 +25,28 @@ use tao::platform::unix::WindowExtUnix;
 use tao::window::{Icon as WindowIcon, WindowBuilder};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon as TrayIconImage, TrayIcon, TrayIconBuilder};
-use webkit2gtk::{
-    NotificationExt, NotificationPermissionRequest, PermissionRequestExt, SecurityOrigin,
-    SettingsExt, WebContextExt as _, WebViewExt,
-};
-use wry::{WebContext, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
+use webkit2gtk::WebViewExt;
 
-use gtk::glib::prelude::*;
-
-const APP_NAME: &str = "Notion";
+pub const APP_NAME: &str = "Notion";
 const ZOOM_STEP: f64 = 0.1;
 
-/// ページに注入するスクリプト: キーボードショートカットとマウスの戻る/進むボタン
-const INIT_JS: &str = r#"
-(() => {
-  if (window.__notionLinux) return;
-  window.__notionLinux = true;
-  const send = (m) => { try { window.ipc.postMessage(m); } catch (_) {} };
-  window.addEventListener('keydown', (e) => {
-    let cmd = null;
-    const ctrl = e.ctrlKey && !e.metaKey && !e.altKey;
-    if (ctrl) {
-      if (e.key === '=' || e.key === '+' || e.key === ';') cmd = 'zoom-in';
-      else if (e.key === '-' && !e.shiftKey) cmd = 'zoom-out';
-      else if (e.key === '0' && !e.shiftKey) cmd = 'zoom-reset';
-      else if ((e.key === 'q' || e.key === 'Q') && !e.shiftKey) cmd = 'quit';
-      else if ((e.key === 'r' || e.key === 'R') && !e.shiftKey) cmd = 'reload';
-    }
-    if (e.key === 'F5' && !e.ctrlKey && !e.altKey) cmd = 'reload';
-    if (e.altKey && !e.ctrlKey && !e.shiftKey) {
-      if (e.key === 'ArrowLeft') cmd = 'back';
-      else if (e.key === 'ArrowRight') cmd = 'forward';
-    }
-    if (cmd) { e.preventDefault(); e.stopPropagation(); send(cmd); }
-  }, true);
-  window.addEventListener('mouseup', (e) => {
-    if (e.button === 3) { e.preventDefault(); send('back'); }
-    else if (e.button === 4) { e.preventDefault(); send('forward'); }
-  }, true);
-})();
-"#;
-
 #[derive(Debug)]
-enum UserEvent {
+pub enum UserEvent {
     Menu(MenuEvent),
     Show,
     Open(String),
-    Title(String),
-    Ipc(String),
+    Title {
+        tab: tabs::TabId,
+        title: String,
+    },
+    Ipc {
+        tab: tabs::TabId,
+        msg: String,
+    },
+    /// GTK レベルで捕まえたキーボードショートカット (アクティブなタブに対して実行)
+    Shortcut(&'static str),
+    CloseTab(tabs::TabId),
+    TabSwitched,
 }
 
 struct TrayMenuIds {
@@ -87,7 +65,10 @@ fn print_help() {
          \x20 (既定は ~/.local/share/icons、--system は /usr/share/icons。通常はインストール時に自動実行)\n\n\
          設定ファイル: {cfg}/config.json\n\
          ショートカット: Ctrl+R/F5 再読み込み, Ctrl+= / Ctrl+- / Ctrl+0 ズーム,\n\
-                         Alt+←/→ 戻る/進む, Ctrl+Q 終了",
+                         Alt+←/→ 戻る/進む, Ctrl+Q 終了\n\
+         タブ:           Ctrl+クリック / 中クリック リンクを新しいタブで開く,\n\
+                         Ctrl+T 新しいタブ, Ctrl+W タブを閉じる, Ctrl+Shift+T 閉じたタブを開き直す,\n\
+                         Ctrl+Tab / Ctrl+Shift+Tab タブの切り替え",
         ver = env!("CARGO_PKG_VERSION"),
         cfg = config::config_dir().display()
     );
@@ -181,54 +162,51 @@ fn main() {
     }
     let window = wb.build(&event_loop).expect("ウィンドウを作成できません");
 
-    // ---- WebView ----
-    let mut web_context = WebContext::new(Some(config::data_dir().join("webdata")));
-
-    let start_url = arg_url.clone().unwrap_or_else(|| {
-        let last = state.borrow().last_url.clone();
-        match last {
-            Some(u) if cfg.restore_last_page && policy.classify(&u) == LinkKind::Notion => u,
-            _ => cfg.start_url.clone(),
+    // ---- タブと WebView ----
+    let cfg = Rc::new(cfg);
+    let vbox = window.default_vbox().expect("GTK vbox");
+    let mut tabs = Tabs::new(
+        vbox,
+        cfg.clone(),
+        policy.clone(),
+        proxy.clone(),
+        state.borrow().zoom,
+    );
+    {
+        let st = state.borrow();
+        let saved: Vec<String> = st
+            .tabs
+            .iter()
+            .filter(|u| policy.classify(u) == LinkKind::Notion)
+            .cloned()
+            .collect();
+        if let Some(url) = &arg_url {
+            tabs.open(url, true);
+        } else if cfg.restore_last_page && !saved.is_empty() {
+            tabs.restore(&saved, st.active_tab);
+        } else {
+            match &st.last_url {
+                Some(u) if cfg.restore_last_page && policy.classify(u) == LinkKind::Notion => {
+                    tabs.open(u, true)
+                }
+                _ => tabs.open(&cfg.start_url, true),
+            };
         }
-    });
-
-    let mut builder = WebViewBuilder::new_with_web_context(&mut web_context)
-        .with_clipboard(true)
-        .with_devtools(
-            cfg!(debug_assertions) || std::env::var_os("NOTION_LINUX_DEVTOOLS").is_some(),
-        )
-        .with_initialization_script_for_main_only(INIT_JS, true)
-        .with_ipc_handler({
-            let proxy = proxy.clone();
-            move |req| {
-                let _ = proxy.send_event(UserEvent::Ipc(req.body().clone()));
-            }
-        })
-        .with_document_title_changed_handler({
-            let proxy = proxy.clone();
-            move |title| {
-                let _ = proxy.send_event(UserEvent::Title(title));
-            }
-        })
-        .with_new_window_req_handler({
-            let policy = policy.clone();
-            move |url, features| popup::handle_new_window(&url, &features.opener.webview, &policy)
-        })
-        .with_download_completed_handler(|_url, path, ok| {
-            if let (true, Some(path)) = (ok, path) {
-                notify("ダウンロード完了", &path.display().to_string());
-            }
-        });
-    if !cfg.user_agent.is_empty() {
-        builder = builder.with_user_agent(&cfg.user_agent);
     }
 
-    let vbox = window.default_vbox().expect("GTK vbox");
-    let webview = builder.build_gtk(vbox).expect("WebView を作成できません");
-
-    let wk = webview.webview();
-    setup_webkit(&wk, &cfg, &policy, &proxy, state.borrow().zoom);
-    wk.load_uri(&start_url);
+    // キーボードショートカットはウィンドウで先に捕まえる (エラーページ表示中でも効くように)
+    {
+        let proxy = proxy.clone();
+        window.gtk_window().connect_key_press_event(move |_, ev| {
+            match shortcuts::command_for(ev) {
+                Some(cmd) => {
+                    let _ = proxy.send_event(UserEvent::Shortcut(cmd));
+                    gtk::glib::Propagation::Stop
+                }
+                None => gtk::glib::Propagation::Proceed,
+            }
+        });
+    }
 
     // ---- トレイ ----
     let (tray, tray_ids) = if cfg.tray_icon {
@@ -249,24 +227,30 @@ fn main() {
         *control_flow = ControlFlow::Wait;
         let _keep_tray_alive = &tray;
 
-        let save_state = || {
+        let save_state = |tabs: &Tabs| {
             let mut st = state.borrow_mut();
             st.maximized = window.is_maximized();
-            st.zoom = wk.zoom_level();
-            if let Some(uri) = wk.uri()
-                && policy.classify(&uri) == LinkKind::Notion
-            {
-                st.last_url = Some(uri.to_string());
-            }
+            st.zoom = tabs.zoom();
+            let (urls, active) = tabs.session();
+            st.last_url = urls.get(active).cloned();
+            st.tabs = urls;
+            st.active_tab = active;
             st.save();
+        };
+        let update_title = |tabs: &Tabs| {
+            let title = tabs
+                .active()
+                .map(|t| t.title())
+                .unwrap_or_else(|| APP_NAME.to_string());
+            window.set_title(&title);
         };
         let show_window = || {
             window.set_visible(true);
             window.set_minimized(false);
             window.set_focus();
         };
-        let quit = |cf: &mut ControlFlow| {
-            save_state();
+        let quit = |tabs: &Tabs, cf: &mut ControlFlow| {
+            save_state(tabs);
             single_instance::cleanup();
             *cf = ControlFlow::Exit;
         };
@@ -276,10 +260,10 @@ fn main() {
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
                     if close_to_tray {
-                        save_state();
+                        save_state(&tabs);
                         window.set_visible(false);
                     } else {
-                        quit(control_flow);
+                        quit(&tabs, control_flow);
                     }
                 }
                 WindowEvent::Resized(size) => {
@@ -300,39 +284,77 @@ fn main() {
                 UserEvent::Show => show_window(),
                 UserEvent::Open(url) => {
                     if policy.is_in_app(&url) {
-                        wk.load_uri(&url);
+                        tabs.open(&url, true);
                         show_window();
                     } else {
                         links::open_external(&url);
                     }
                 }
-                UserEvent::Title(title) => {
-                    let title = title.trim();
-                    window.set_title(if title.is_empty() { APP_NAME } else { title });
+                UserEvent::Title { tab, title } => {
+                    if tabs.set_title(tab, &title) {
+                        update_title(&tabs);
+                    }
                 }
-                UserEvent::Ipc(msg) => match msg.as_str() {
-                    "reload" => wk.reload(),
-                    "back" => wk.go_back(),
-                    "forward" => wk.go_forward(),
-                    "zoom-in" => wk.set_zoom_level((wk.zoom_level() + ZOOM_STEP).min(3.0)),
-                    "zoom-out" => wk.set_zoom_level((wk.zoom_level() - ZOOM_STEP).max(0.3)),
-                    "zoom-reset" => wk.set_zoom_level(1.0),
-                    "quit" => quit(control_flow),
-                    _ => {}
-                },
+                UserEvent::TabSwitched => update_title(&tabs),
+                UserEvent::CloseTab(tab) => {
+                    tabs.close(tab);
+                    update_title(&tabs);
+                }
+                UserEvent::Shortcut(cmd) => {
+                    if let Some(tab) = tabs.active().map(|t| t.id) {
+                        let _ = proxy.send_event(UserEvent::Ipc {
+                            tab,
+                            msg: cmd.to_string(),
+                        });
+                    }
+                }
+                UserEvent::Ipc { tab, msg } => {
+                    let wk = tabs.get(tab).map(|t| t.wk());
+                    let (cmd, arg) = msg.split_once(' ').unwrap_or((msg.as_str(), ""));
+                    match (cmd, wk) {
+                        ("reload", Some(wk)) => wk.reload(),
+                        ("back", Some(wk)) => wk.go_back(),
+                        ("forward", Some(wk)) => wk.go_forward(),
+                        ("zoom-in", _) => tabs.set_zoom(tabs.zoom() + ZOOM_STEP),
+                        ("zoom-out", _) => tabs.set_zoom(tabs.zoom() - ZOOM_STEP),
+                        ("zoom-reset", _) => tabs.set_zoom(1.0),
+                        ("new-tab", _) if arg.is_empty() => {
+                            tabs.open(&cfg.start_url, true);
+                        }
+                        ("new-tab", _) => {
+                            // Ctrl+クリック: Notion 内のリンクは背景の新しいタブ、外部はブラウザ
+                            if policy.is_in_app(arg) {
+                                tabs.open(arg, false);
+                            } else {
+                                links::open_external(arg);
+                            }
+                        }
+                        ("close-tab", _) => {
+                            tabs.close(tab);
+                            update_title(&tabs);
+                        }
+                        ("reopen-tab", _) => tabs.reopen_closed(),
+                        ("next-tab", _) => tabs.cycle(1),
+                        ("prev-tab", _) => tabs.cycle(-1),
+                        ("quit", _) => quit(&tabs, control_flow),
+                        _ => {}
+                    }
+                }
                 UserEvent::Menu(e) => {
                     if let Some(ids) = &tray_ids {
                         if e.id == ids.show {
                             if window.is_visible() && window.is_focused() {
-                                save_state();
+                                save_state(&tabs);
                                 window.set_visible(false);
                             } else {
                                 show_window();
                             }
                         } else if e.id == ids.reload {
-                            wk.reload();
+                            if let Some(t) = tabs.active() {
+                                t.wk().reload();
+                            }
                         } else if e.id == ids.quit {
-                            quit(control_flow);
+                            quit(&tabs, control_flow);
                         }
                     }
                 }
@@ -340,73 +362,6 @@ fn main() {
             _ => {}
         }
     });
-}
-
-/// wry では設定できない WebKitGTK の細かな設定
-fn setup_webkit(
-    wk: &webkit2gtk::WebView,
-    cfg: &Config,
-    policy: &Rc<LinkPolicy>,
-    proxy: &EventLoopProxy<UserEvent>,
-    zoom: f64,
-) {
-    if let Some(settings) = WebViewExt::settings(wk) {
-        settings.set_enable_smooth_scrolling(true);
-        settings.set_javascript_can_access_clipboard(true);
-        settings.set_enable_back_forward_navigation_gestures(true);
-    }
-    wk.set_zoom_level(if (0.3..=3.0).contains(&zoom) {
-        zoom
-    } else {
-        1.0
-    });
-
-    if let Some(ctx) = wk.context() {
-        ctx.set_spell_checking_enabled(cfg.spell_checking);
-        let langs: Vec<&str> = cfg
-            .spell_checking_languages
-            .iter()
-            .map(String::as_str)
-            .collect();
-        ctx.set_spell_checking_languages(&langs);
-
-        // Notion からのデスクトップ通知を既定で許可する
-        let init_perms = |ctx: &webkit2gtk::WebContext| {
-            let origins = [
-                SecurityOrigin::new("https", "www.notion.so", 0),
-                SecurityOrigin::new("https", "notion.so", 0),
-                SecurityOrigin::new("https", "www.notion.com", 0),
-            ];
-            let refs: Vec<&SecurityOrigin> = origins.iter().collect();
-            ctx.initialize_notification_permissions(&refs, &[]);
-        };
-        init_perms(&ctx);
-        ctx.connect_initialize_notification_permissions(init_perms);
-    }
-
-    // 権限リクエスト: 通知は許可、それ以外は既定 (拒否)
-    wk.connect_permission_request(|_, req| {
-        if req.is::<NotificationPermissionRequest>() {
-            req.allow();
-            true
-        } else {
-            false
-        }
-    });
-
-    // 通知をクリックしたらウィンドウを前面に
-    {
-        let proxy = proxy.clone();
-        wk.connect_show_notification(move |_, notification| {
-            let proxy = proxy.clone();
-            notification.connect_clicked(move |_| {
-                let _ = proxy.send_event(UserEvent::Show);
-            });
-            false // 表示自体は WebKitGTK の既定処理 (デスクトップ通知) に任せる
-        });
-    }
-
-    popup::attach_navigation_policy(wk, policy.clone(), None);
 }
 
 fn build_tray(
@@ -442,7 +397,7 @@ fn build_tray(
 }
 
 /// notify-send があればデスクトップ通知を出す (無ければ何もしない)
-fn notify(summary: &str, body: &str) {
+pub fn notify(summary: &str, body: &str) {
     let _ = std::process::Command::new("notify-send")
         .args([
             "--app-name",
