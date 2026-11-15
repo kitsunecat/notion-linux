@@ -4,7 +4,9 @@ set -e
 ICON_DIR=/usr/share/icons/hicolor
 
 if [ "$1" = "configure" ]; then
-    if timeout 30 /usr/bin/notion-linux --fetch-icon --system; then
+    if [ -e "$ICON_DIR/256x256/apps/notion-linux.png" ]; then
+        : # 取得済み (アップデート時は取り直さない)
+    elif timeout 30 /usr/bin/notion-linux --fetch-icon --system; then
         :
     elif [ ! -e "$ICON_DIR/256x256/apps/notion-linux.png" ]; then
         echo "notion-linux: Notion のアイコンを取得できなかったため、オリジナルのアイコンを使います" >&2

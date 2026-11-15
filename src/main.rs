@@ -45,6 +45,8 @@ pub enum UserEvent {
     },
     /// GTK レベルで捕まえたキーボードショートカット (アクティブなタブに対して実行)
     Shortcut(&'static str),
+    /// SIGTERM / SIGINT: 状態を保存して終了する (update.sh の再起動用)
+    Quit,
     CloseTab(tabs::TabId),
     TabSwitched,
 }
@@ -208,6 +210,15 @@ fn main() {
         });
     }
 
+    // SIGTERM / SIGINT を受けたら、タブなどの状態を保存してから終了する
+    for signal in [15, 2] {
+        let proxy = proxy.clone();
+        gtk::glib::unix_signal_add_local(signal, move || {
+            let _ = proxy.send_event(UserEvent::Quit);
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
     // ---- トレイ ----
     let (tray, tray_ids) = if cfg.tray_icon {
         match build_tray(&proxy, icon_rgba, icon_w, icon_h) {
@@ -300,6 +311,7 @@ fn main() {
                     tabs.close(tab);
                     update_title(&tabs);
                 }
+                UserEvent::Quit => quit(&tabs, control_flow),
                 UserEvent::Shortcut(cmd) => {
                     if let Some(tab) = tabs.active().map(|t| t.id) {
                         let _ = proxy.send_event(UserEvent::Ipc {
