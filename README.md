@@ -62,6 +62,23 @@ GitHub Actions でもビルドしているので、Actions の「notion-linux-de
 
 アンインストールは `./scripts/uninstall-local.sh` です。
 
+### アップデート
+
+リポジトリが更新されたら、clone したディレクトリで次を実行します。`git pull` → ビルド → 再インストールまでまとめて行います。
+
+```bash
+./scripts/update.sh            # インストール方法 (.deb / ~/.local) は自動で判定
+./scripts/update.sh --restart  # 起動中のアプリも再起動する
+```
+
+| オプション | 説明 |
+| --- | --- |
+| `--deb` / `--local` | インストール方法を指定する (省略時は自動判定) |
+| `--force` | git に更新がなくてもビルドして入れ直す |
+| `--restart` | インストール後、起動中の notion-linux を再起動する |
+
+未コミットの変更がある場合は止まるので、`git stash` などで退避してから実行してください。.deb の場合は途中で sudo のパスワードを求められます。
+
 ### 起動
 
 メニューの **アプリケーション → オフィス → Notion** から、または端末で `notion-linux` を実行します。
